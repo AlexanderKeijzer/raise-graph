@@ -1,0 +1,15 @@
+[package]
+name = "raise-graph"
+version = "0.1.0"
+authors = ["Alexander Keijzer <alexanderkeijzer@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+raise = { path = "../raise"}
+syn = { version = "1.0.20", features = ["full", "fold"] }
+quote = "1.0.4"
+
+[lib]
+proc-macro = true
