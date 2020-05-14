@@ -1,4 +1,5 @@
-mod autograd;
+#![feature(proc_macro_diagnostic)]
+mod autodiff;
 mod reader;
 
 extern crate raise;

@@ -8,6 +8,7 @@ edition = "2018"
 
 [dependencies]
 raise = { path = "../raise"}
+proc-macro2 = "1.0.12"
 syn = { version = "1.0.20", features = ["full", "fold"] }
 quote = "1.0.4"
 

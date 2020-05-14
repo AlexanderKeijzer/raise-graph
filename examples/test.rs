@@ -35,8 +35,8 @@ impl Lay for test {
 
     #[graph]
     fn testje(&mut self, input: f32) -> f32 {
-        let a = input.exp();
-        self.weight*input + self.bias
+        let a = -input.exp();
+        self.weight*input + a
     }
 
     fn backward(&mut self, input: f32, output_grad: f32) -> f32 {

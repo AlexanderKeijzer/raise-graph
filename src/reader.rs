@@ -4,8 +4,10 @@ use quote::quote;
 use std::mem;
 use std::default::Default;
 use std::fmt::Display;
+use std::collections::HashMap;
+use syn::spanned::Spanned;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum Arg {
     None,
     Operation(Box<Operation>),
@@ -34,7 +36,7 @@ impl Display for Arg {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct Operation {
     receiver: Arg,
     method: String,
@@ -53,9 +55,10 @@ impl Operation {
 
 impl Display for Operation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        write!(f, "{}", self.receiver)?;
         write!(f, "{}(", self.method.to_string())?;
+        write!(f, "{}", self.receiver)?;
         for i in 0..self.args.len() {
+            write!(f, ", ")?;
             self.args[i].fmt(f)?;
         }
         write!(f, ")")?;
@@ -65,37 +68,53 @@ impl Display for Operation {
 
 pub struct Reader {
     input_name: String,
-    operations: Vec::<String>,
-    objects: Vec<String>,
+    objects: HashMap<String, Arg>,
     ops: Vec<Operation>,
-    current_arg: Arg
+    current_arg: Arg,
+    output: Arg
 }
 
 impl Reader {
     pub fn new() -> Reader {
         Reader {
             input_name: "".to_string(),
-            operations: Vec::new(),
-            objects: Vec::new(),
+            objects: HashMap::new(),
             ops: Vec::new(),
-            current_arg: Arg::None
+            current_arg: Arg::None,
+            output: Arg::None,
         }
+    }
+
+    fn compile_output(&mut self, original: &Expr) -> Expr {
+        let arg = self.current_arg.take();
+        if Arg::None == arg {
+            original.span().unwrap().error("Output cannot be none.").emit(); panic!()
+        }
+        self.output = arg;
+
+        let inp = "Input: ".to_string() + &self.input_name;
+        let mut expressions = "".to_string();
+        for k in 0..self.ops.len() {
+            expressions += &(format!("{}", self.ops[k]) + "\n");
+        }
+        let out = "Output: ".to_string() + &self.output.to_string();
+        let new_code = quote! {
+            {
+                println!("{}", #inp);
+                if !(#expressions).is_empty() {
+                    println!("{}", #expressions);
+                }
+                println!("{}", #out);
+                #original
+            }
+        };
+        syn::parse2(new_code)
+        .expect("could not generate prints")
     }
 }
 
 impl Fold for Reader {
 
-    fn fold_pat(&mut self, ii: Pat) -> Pat {
-        match &ii {
-            Pat::Ident(i) => {
-                self.objects.push(i.ident.to_string());
-            }
-            _ => ()
-        }
-        fold::fold_pat(self, ii)
-    }
-
-    
     fn fold_pat_type(&mut self, ii: PatType) -> PatType {
         match ii.pat.as_ref() {
             Pat::Ident(i) => {
@@ -104,49 +123,35 @@ impl Fold for Reader {
             }
             _ => fold::fold_pat_type(self, ii)
         }
-        //fold::fold_pat_type(self, ii)
     }
     
 
     fn fold_local(&mut self, ii: Local) -> Local {
-        match &(&ii).pat {
+        let var_name = match &(&ii).pat {
             Pat::Ident(i) => {
-                self.operations.push(format!("let {}", i.ident.to_string()));
+                i.ident.to_string()
             }
-            _ => panic!()
+            _ => {ii.span().unwrap().error("Unsupported local variable creation.").emit(); panic!()}
+        };
+
+        let arg;
+        if (&ii).init.is_some() {
+            let (_, exp) = ii.clone().init.unwrap();
+            self.fold_expr(*exp);
+            arg = self.current_arg.take();
+        } else {
+            arg = Arg::None;
         }
-        if ii.init.is_some() {
-            self.operations.push("=".to_string());
-        }
-        fold::fold_local(self, ii)
+        self.objects.insert(var_name, arg);
+        ii
     }
 
     fn fold_stmt(&mut self, mut ii: Stmt) -> Stmt {
         ii = fold::fold_stmt(self, ii);
-        if let Arg::Operation(op) = self.current_arg.take() {
-            self.ops.push(*op);
-        }
         if let Stmt::Expr(i) = &ii {
-            let ops = self.operations.join(" ");
-            let objs = self.objects.join(", ");
-            let inp = self.input_name.to_string();
-            let mut s = "".to_string();
-            for k in 0..self.ops.len() {
-                s += &(format!("{}", self.ops[k]) + "\n");
-            }
-            let new_code = quote! {
-                {
-                    println!("{}", #inp);
-                    println!("{}", #s);
-                    println!("{}", #ops);
-                    println!("{}", #objs);
-                    #ii
-                }
-            };
-            ii = syn::parse2(new_code)
-            .expect("could not generate prints");
-        } else {
-            self.operations.push("\n".to_string());
+            ii = Stmt::Expr(self.compile_output(i));
+        } else if let Arg::Operation(op) = self.current_arg.take() {
+            self.ops.push(*op);
         }
         ii
     }
@@ -163,38 +168,47 @@ impl Fold for Reader {
 
                 let method = match i.op {
                     BinOp::Add(_) => {
-                        "+"
+                        "add"
                     }
                     BinOp::Sub(_) => {
-                        "-"
+                        "sub"
                     }
                     BinOp::Mul(_) => {
-                        "*"
+                        "mul"
                     }
                     BinOp::Div(_) => {
-                        "/"
+                        "div"
                     }
-                    _ => panic!()
+                    _ => {i.op.span().unwrap().error("Unsupported bianry expression.").emit(); panic!()}
                 };
                 self.current_arg = Arg::Operation(Box::new(Operation::new(left, method.to_string(), vec![right])));
             }
             Expr::Unary(i) => {
-                match i.op {
-                    UnOp::Neg(_) => {
-                        self.operations.push("-".to_string());
-                    }
-                    _ => ()
-                }
                 self.fold_expr(*i.expr);
+                let receiver = self.current_arg.take();
+
+                let op = match i.op {
+                    UnOp::Neg(_) => {
+                        "neg"
+                    }
+                    _ => {i.op.span().unwrap().error("Unsupported unary expression.").emit(); panic!()}
+                };
+                self.current_arg = Arg::Operation(Box::new(Operation::new(receiver, op.to_string(), vec![])));
             }
             Expr::Paren(i) => {
                 self.fold_expr(*i.expr);
             }
             Expr::Assign(i) => {
-                self.operations.push("ass".to_string());
-                self.fold_expr(*i.left);
-                self.operations.push("=".to_string());
-                self.fold_expr(*i.right);
+                self.fold_expr(*i.left.clone());
+                let arg = self.current_arg.take();
+                if let Arg::Item(obj_name) = arg {
+                    self.fold_expr(*i.right);
+                    let arg = self.current_arg.take();
+                    self.objects.insert(obj_name, arg);
+                } else {
+                    (*i.left).span().unwrap().error("Assigning to expression is not supported.").emit();
+                    panic!();
+                }
             }
             Expr::Lit(i) => {
                 let lit = match i.lit {
@@ -206,25 +220,16 @@ impl Fold for Reader {
             }
             Expr::Path(i) => {
                 let path = i.path.segments.last().unwrap().ident.to_string();
-                self.current_arg = Arg::Item(path.clone());
+                if let Some(arg) = self.objects.remove(&path) {
+                    self.current_arg = arg;
+                } else {
+                    self.current_arg = Arg::Item(path.clone());
+                }
             }
-            Expr::Return(i) => {
-                let ops = self.operations.join(" ");
-                let objs = self.objects.join(", ");
-                let inp = self.input_name.to_string();
-                let o = format!("{:?}", self.ops);
-                let new_code = quote! {
-                    {
-                        println!("{}", #inp);
-                        println!("{}", #o);
-                        println!("{}", #ops);
-                        println!("{}", #objs);
-                        #ii
-                    }
-                };
-
-                ii = syn::parse2(new_code)
-                .expect("could not generate prints");
+            Expr::Return(mut i) => {
+                self.fold_expr(*i.clone().expr.unwrap());
+                i.expr = Some(Box::new(self.compile_output(&*i.expr.unwrap())));
+                ii = Expr::Return(i);
             }
             Expr::Field(i) => {
                  let mut s;
@@ -232,17 +237,16 @@ impl Fold for Reader {
                     Expr::Path(j) => {
                         s = j.path.get_ident().unwrap().to_string();
                     }
-                    _ => panic!()
+                    _ => {i.member.span().unwrap().error("Unsupported field indexing.").emit(); panic!()}
                 }
                 match i.member {
                     Member::Named(j) => {
 
                         s += &(".".to_string() + &j.to_string());
                     }
-                    _ => panic!()
+                    _ => {i.member.span().unwrap().error("Only name fields can be accessed.").emit(); panic!()} //panic!("Only name fields can be accessed.")
                 }
                 self.current_arg = Arg::Item(s.clone());
-                self.operations.push(s);
             }
             Expr::MethodCall(i) => {
                 self.fold_expr(*i.receiver);
@@ -252,7 +256,7 @@ impl Fold for Reader {
                     self.fold_expr(i.args[k].clone());
                     args.push(self.current_arg.take());
                 }
-                self.current_arg = Arg::Operation(Box::new(Operation::new(receiver, ".".to_string() + &i.method.to_string(), args)));
+                self.current_arg = Arg::Operation(Box::new(Operation::new(receiver, i.method.to_string(), args)));
             }
 
             /*
@@ -271,7 +275,7 @@ impl Fold for Reader {
             */
 
 
-            _ => panic!("Unsupported expression.")
+            _ => {ii.span().unwrap().error("Unsupported expression.").emit(); panic!()}
         }
         ii//fold::fold_expr(self, ii)
     }
