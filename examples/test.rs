@@ -1,45 +1,63 @@
 extern crate raise_graph;
 
 use raise_graph::graph;
-
-fn testje(la: i32) {
-    let mut a = -(1 + 1) * 2 / 4;
-    let b = a * a;
-    let c;
-    c = 2;
-    let f = c*a;
-    return;
-}
+use raise::tensor::Tensor;
+use raise::layers::layer::Layer;
 
 fn main() {
-    testje(1);
-    let mut a = test{
-        weight: 2.,
-        bias: 1.
+    let a = Test{
+        input: None,
+        weight: Tensor::rand([10, 10, 1, 1]),
+        bias: Tensor::rand([1, 10, 1, 1])
     };
-    a.testje(2.);
+    let b = Test2{
+        input: None,
+    };
+    let aout = a.forward(&Tensor::rand([1, 10, 1, 1]));
+    let bout = b.forward(&aout);
 }
 
-struct test {
-    weight: f32,
-    bias: f32
+#[derive(Clone)]
+struct Test {
+    input: Option<Tensor>,
+    weight: Tensor,
+    bias: Tensor
 }
 
-trait Lay {
-    fn testje(&mut self, input: f32) -> f32;
-
-    fn backward(&mut self, input: f32, output_grad: f32) -> f32;
-}
-
-impl Lay for test {
+impl Layer for Test {
 
     #[graph]
-    fn testje(&mut self, input: f32) -> f32 {
-        let a = -input.exp();
-        self.weight*input + a
+    fn forward(&self, input: &Tensor) -> Tensor {
+        //let a = -input.clamp_min(0.);
+        &self.weight*input + &self.bias
     }
 
-    fn backward(&mut self, input: f32, output_grad: f32) -> f32 {
-        input
+    fn take_input(&mut self) -> Tensor {
+        self.input.take().unwrap()
+    }
+
+    fn set_input(&mut self, input: Tensor) {
+        self.input = Some(input);
+    }
+}
+
+#[derive(Clone)]
+struct Test2 {
+    input: Option<Tensor>,
+}
+
+impl Layer for Test2 {
+
+    #[graph]
+    fn forward(&self, input: &Tensor) -> Tensor {
+         input.clone().clamp_min(0.)
+    }
+
+    fn take_input(&mut self) -> Tensor {
+        self.input.take().unwrap()
+    }
+
+    fn set_input(&mut self, input: Tensor) {
+        self.input = Some(input);
     }
 }

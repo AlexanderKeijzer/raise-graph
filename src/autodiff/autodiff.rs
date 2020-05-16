@@ -1,52 +1,62 @@
-
-use raise::tensor::Tensor;
-use std::ops::Add;
-use quote::quote;
 use proc_macro2::TokenStream;
+use std::collections::HashMap;
+use quote::quote;
 
-//fn a_diff(function_ident: &str)
-
-fn add_diff(function_ident: &str, diff_func: fn(receiver: String, arguments: Vec<String>) -> TokenStream) {
+pub struct AutoDiff {
+    map: HashMap<String, Vec<TokenStream>>
 }
 
-fn start() {
-    add_diff("add", |receiver, arguments| {
-        quote! {
-            #receiver + #(arguments[0])
-        }
-    });
-    add_diff("sub", |receiver, arguments| {
-        quote! {
-            #receiver - #(arguments[0])
-        }
-    });
-    add_diff("mul", |receiver, arguments| {
-        quote! {
-            (#receiver).transpose() - (#(arguments[0]).transpose())
-        }
-    });
-    add_diff("neg", |receiver, arguments| {
-        quote! {
-            -#receiver;
-        }
-    });
-    add_diff("clamp", |receiver, arguments| {
-        quote! {
-            receiver.is_between_(#(arguments[0]), #(arguments[1]))
-        }
-    });
-    add_diff("clamp_min", |receiver, arguments| {
-        quote! {
-            receiver.is_bigger_(#(arguments[0]))
-        }
-    });
-    add_diff("clamp_max", |receiver, arguments| {
-        quote! {
-            receiver.is_smaller_(#(arguments[0]))
-        }
-    });
-}
+impl AutoDiff {
 
-//fn t() -> dyn Fn(f32) -> Tensor {
-//    Tensor::add
-//}
+    pub fn new() -> AutoDiff {
+        let mut s = AutoDiff {
+            map: HashMap::new()
+        };
+        s.init();
+        s
+    }
+
+    pub fn add_diff(&mut self, method: String, expressions: Vec<TokenStream>) {
+        self.map.insert(method, expressions);
+    }
+
+    pub fn get_expressions(&self, method: String) -> &Vec<TokenStream> {
+        self.map.get(&method).expect(&format!("No diff found for function {}", method))
+    }
+
+    pub fn init(&mut self) {
+
+        macro_rules! add_diff {
+            ($owner:path, $func:literal, $($diff:expr),* ) => {
+                {
+                    let mut expressions: Vec<proc_macro2::TokenStream> = Vec::new();
+                    $(
+                        expressions.push( quote! {
+                            $diff
+                        });
+                    )*
+                    $owner.add_diff($func.to_string(), expressions);
+                }
+            };
+        }
+
+        //We should resolve type and accept function paths instead, but for now this works
+        add_diff!(self, "add", grad, grad);
+        add_diff!(self, "sub", grad, -grad);
+        add_diff!(self, "mul", grad*&b.transpose(), &a.transpose()*grad);
+        add_diff!(self, "div", grad/b, -(grad*a)/(b.powi(2)));
+        add_diff!(self, "neg", -grad);
+        add_diff!(self, "sin", grad*a.cos());
+        add_diff!(self, "cos", grad*(-a.sin()));
+        add_diff!(self, "tan", grad/(a.cos()).powi(2));
+        add_diff!(self, "sinh", grad*a.cosh());
+        add_diff!(self, "cosh", grad*a.sinh());
+        add_diff!(self, "tanh", grad/(a.cosh()).powi(2));
+        add_diff!(self, "exp", grad*&a.exp());
+        add_diff!(self, "ln", grad/a);
+        add_diff!(self, "clamp", grad*(&a.is_between(b, c)));
+        add_diff!(self, "clamp_min", grad*&a.is_bigger(b));
+        add_diff!(self, "clamp_max", grad*&a.is_smaller(b));
+        add_diff!(self, "clone", grad);
+    }
+}

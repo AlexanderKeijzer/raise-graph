@@ -11,6 +11,7 @@ raise = { path = "../raise"}
 proc-macro2 = "1.0.12"
 syn = { version = "1.0.20", features = ["full", "fold"] }
 quote = "1.0.4"
+lazy_static = "1.4.0"
 
 [lib]
 proc-macro = true

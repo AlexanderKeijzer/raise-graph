@@ -6,65 +6,7 @@ use std::default::Default;
 use std::fmt::Display;
 use std::collections::HashMap;
 use syn::spanned::Spanned;
-
-#[derive(Debug, PartialEq)]
-enum Arg {
-    None,
-    Operation(Box<Operation>),
-    Item(String)
-}
-
-impl Arg {
-    fn take(&mut self) -> Arg {
-        mem::take(self)
-    }
-}
-
-impl Default for Arg {
-    fn default() -> Self {
-        Arg::None
-    }
-}
-
-impl Display for Arg {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        match self {
-            Arg::Operation(op) => op.fmt(f),
-            Arg::Item(item) => write!(f, "{}", item),
-            _ => Ok(())
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-struct Operation {
-    receiver: Arg,
-    method: String,
-    args: Vec<Arg>
-}
-
-impl Operation {
-    fn new(receiver: Arg, method: String, args: Vec<Arg>) -> Operation {
-        Operation {
-            receiver: receiver,
-            method: method,
-            args: args
-        }
-    }
-}
-
-impl Display for Operation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        write!(f, "{}(", self.method.to_string())?;
-        write!(f, "{}", self.receiver)?;
-        for i in 0..self.args.len() {
-            write!(f, ", ")?;
-            self.args[i].fmt(f)?;
-        }
-        write!(f, ")")?;
-        Ok(())
-    }
-}
+use proc_macro2::TokenStream;
 
 pub struct Reader {
     input_name: String,
@@ -85,12 +27,21 @@ impl Reader {
         }
     }
 
+    pub fn get_output_arg(self) -> Arg {
+        self.output
+    }
+
+    pub fn get_input_name(&self) -> String {
+        self.input_name.clone()
+    }
+
     fn compile_output(&mut self, original: &Expr) -> Expr {
         let arg = self.current_arg.take();
         if Arg::None == arg {
-            original.span().unwrap().error("Output cannot be none.").emit(); panic!()
+            original.span().unwrap().error("Output cannot be none.").emit(); panic!("Output cannot be none.")
         }
         self.output = arg;
+        /*
 
         let inp = "Input: ".to_string() + &self.input_name;
         let mut expressions = "".to_string();
@@ -110,6 +61,8 @@ impl Reader {
         };
         syn::parse2(new_code)
         .expect("could not generate prints")
+        */
+        original.clone()
     }
 }
 
@@ -131,7 +84,7 @@ impl Fold for Reader {
             Pat::Ident(i) => {
                 i.ident.to_string()
             }
-            _ => {ii.span().unwrap().error("Unsupported local variable creation.").emit(); panic!()}
+            _ => {ii.span().unwrap().error("Unsupported local variable creation.").emit(); panic!("Unsupported local variable creation.")}
         };
 
         let arg;
@@ -179,7 +132,7 @@ impl Fold for Reader {
                     BinOp::Div(_) => {
                         "div"
                     }
-                    _ => {i.op.span().unwrap().error("Unsupported bianry expression.").emit(); panic!()}
+                    _ => {i.op.span().unwrap().error("Unsupported binary expression.").emit(); panic!("Unsupported binary expression.")}
                 };
                 self.current_arg = Arg::Operation(Box::new(Operation::new(left, method.to_string(), vec![right])));
             }
@@ -191,7 +144,7 @@ impl Fold for Reader {
                     UnOp::Neg(_) => {
                         "neg"
                     }
-                    _ => {i.op.span().unwrap().error("Unsupported unary expression.").emit(); panic!()}
+                    _ => {i.op.span().unwrap().error("Unsupported unary expression.").emit(); panic!("Unsupported unary expression.")}
                 };
                 self.current_arg = Arg::Operation(Box::new(Operation::new(receiver, op.to_string(), vec![])));
             }
@@ -207,23 +160,53 @@ impl Fold for Reader {
                     self.objects.insert(obj_name, arg);
                 } else {
                     (*i.left).span().unwrap().error("Assigning to expression is not supported.").emit();
-                    panic!();
+                    panic!("Assigning to expression is not supported.");
                 }
             }
             Expr::Lit(i) => {
                 let lit = match i.lit {
                     Lit::Int(li) => li.to_string(),
                     Lit::Float(li) => li.to_string(),
-                    _ => panic!()
+                    _ => {i.lit.span().unwrap().error("Unsupported literal.").emit(); panic!("Unsupported literal.")}
                 };
                 self.current_arg = Arg::Item(lit.clone());
             }
             Expr::Path(i) => {
                 let path = i.path.segments.last().unwrap().ident.to_string();
-                if let Some(arg) = self.objects.remove(&path) {
-                    self.current_arg = arg;
+                if let Some(arg) = self.objects.get(&path) {
+                    self.current_arg = arg.clone();
                 } else {
-                    self.current_arg = Arg::Item(path.clone());
+                    self.current_arg = Arg::Item("&".to_string() + &path);
+                }
+            }
+            //This has slightly diffent copies Path and Field, can we merge this?
+            Expr::Reference(i) => {
+                match *i.expr {
+                    Expr::Path(j) => {
+                        let path = j.path.segments.last().unwrap().ident.to_string();
+                        if let Some(arg) = self.objects.get(&path) {
+                            self.current_arg = arg.clone();
+                        } else {
+                            self.current_arg = Arg::Item("&".to_string() + &path);
+                        }
+                    }
+                    Expr::Field(j) => {
+                        let mut s = "&".to_string();
+                        match *j.base {
+                            Expr::Path(k) => {
+                                s += &k.path.get_ident().unwrap().to_string();
+                            }
+                            _ => {j.member.span().unwrap().error("Unsupported field indexing.").emit(); panic!("Unsupported field indexing.")}
+                        }
+                        match j.member {
+                            Member::Named(k) => {
+                                s += &(".".to_string() + &k.to_string());
+                            }
+                            _ => {j.member.span().unwrap().error("Only name fields can be accessed.").emit(); panic!("Only name fields can be accessed.")}
+                        }
+                        self.current_arg = Arg::Item(s);
+                    }
+                    _ => {i.expr.span().unwrap().error("Unsupported reference.").emit(); panic!("Unsupported reference.")}
                 }
             }
             Expr::Return(mut i) => {
@@ -232,19 +215,19 @@ impl Fold for Reader {
                 ii = Expr::Return(i);
             }
             Expr::Field(i) => {
-                 let mut s;
+                let mut s;
                 match *i.base {
                     Expr::Path(j) => {
                         s = j.path.get_ident().unwrap().to_string();
                     }
-                    _ => {i.member.span().unwrap().error("Unsupported field indexing.").emit(); panic!()}
+                    _ => {i.member.span().unwrap().error("Unsupported field indexing.").emit(); panic!("Unsupported field indexing.")}
                 }
                 match i.member {
                     Member::Named(j) => {
 
                         s += &(".".to_string() + &j.to_string());
                     }
-                    _ => {i.member.span().unwrap().error("Only name fields can be accessed.").emit(); panic!()} //panic!("Only name fields can be accessed.")
+                    _ => {i.member.span().unwrap().error("Only name fields can be accessed.").emit(); panic!("Only name fields can be accessed.")}
                 }
                 self.current_arg = Arg::Item(s.clone());
             }
@@ -275,9 +258,104 @@ impl Fold for Reader {
             */
 
 
-            _ => {ii.span().unwrap().error("Unsupported expression.").emit(); panic!()}
+            _ => {ii.span().unwrap().error("Unsupported expression.").emit(); panic!("Unsupported expression.")}
         }
         ii//fold::fold_expr(self, ii)
     }
 
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum Arg {
+    None,
+    Operation(Box<Operation>),
+    Item(String)
+}
+
+impl Arg {
+    fn take(&mut self) -> Arg {
+        mem::take(self)
+    }
+
+    pub fn to_tokenstream(&self) -> TokenStream {
+        match self {
+            Arg::None => panic!(),
+            Arg::Operation(op) => op.to_tokenstream(),
+            Arg::Item(i) => i.parse().unwrap()
+        }
+    }
+}
+
+impl Default for Arg {
+    fn default() -> Self {
+        Arg::None
+    }
+}
+
+impl Display for Arg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        match self {
+            Arg::Operation(op) => op.fmt(f),
+            Arg::Item(item) => write!(f, "{}", item),
+            _ => Ok(())
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct Operation {
+    pub receiver: Arg,
+    pub method: String,
+    pub args: Vec<Arg>
+}
+
+impl Operation {
+    fn new(receiver: Arg, method: String, args: Vec<Arg>) -> Operation {
+        Operation {
+            receiver: receiver,
+            method: method,
+            args: args
+        }
+    }
+
+    pub fn to_tokenstream(&self) -> TokenStream {
+        if self.method == "add" {
+            let rec = self.receiver.to_tokenstream();
+            let arg = self.args[0].to_tokenstream();
+            quote! {#rec+#arg}
+        } else if self.method == "sub" {
+            let rec = self.receiver.to_tokenstream();
+            let arg = self.args[0].to_tokenstream();
+            quote! {#rec-#arg}
+        } else if self.method == "mul" {
+            let rec = self.receiver.to_tokenstream();
+            let arg = self.args[0].to_tokenstream();
+            quote! {#rec*#arg}
+        } else if self.method == "div" {
+            let rec = self.receiver.to_tokenstream();
+            let arg = self.args[0].to_tokenstream();
+            quote! {#rec/#arg}
+        } else if self.method == "neg" {
+            let rec = self.receiver.to_tokenstream();
+            quote! {-#rec}
+        } else {
+            let rec = self.receiver.to_tokenstream();
+            let met: TokenStream = self.method.parse().unwrap();
+            let args: Vec<TokenStream> = self.args.iter().map(|arg| arg.to_tokenstream()).collect();
+            quote! {#rec.#met(#(#args),*)}
+        }
+    }
+}
+
+impl Display for Operation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        write!(f, "{}(", self.method.to_string())?;
+        write!(f, "{}", self.receiver)?;
+        for i in 0..self.args.len() {
+            write!(f, ", ")?;
+            self.args[i].fmt(f)?;
+        }
+        write!(f, ")")?;
+        Ok(())
+    }
 }
