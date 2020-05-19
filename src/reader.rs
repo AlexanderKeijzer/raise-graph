@@ -176,7 +176,7 @@ impl Fold for Reader {
                 if let Some(arg) = self.objects.get(&path) {
                     self.current_arg = arg.clone();
                 } else {
-                    self.current_arg = Arg::Item("&".to_string() + &path);
+                    self.current_arg = Arg::Item(path);
                 }
             }
             //This has slightly diffent copies Path and Field, can we merge this?
@@ -215,10 +215,10 @@ impl Fold for Reader {
                 ii = Expr::Return(i);
             }
             Expr::Field(i) => {
-                let mut s;
+                let mut s = String::new();
                 match *i.base {
                     Expr::Path(j) => {
-                        s = j.path.get_ident().unwrap().to_string();
+                        s += &j.path.get_ident().unwrap().to_string();
                     }
                     _ => {i.member.span().unwrap().error("Unsupported field indexing.").emit(); panic!("Unsupported field indexing.")}
                 }
