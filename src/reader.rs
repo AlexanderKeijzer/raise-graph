@@ -31,10 +31,6 @@ impl Reader {
         self.output
     }
 
-    pub fn get_input_name(&self) -> String {
-        self.input_name.clone()
-    }
-
     fn compile_output(&mut self, original: &Expr) -> Expr {
         let arg = self.current_arg.take();
         if Arg::None == arg {
@@ -172,10 +168,13 @@ impl Fold for Reader {
                 self.current_arg = Arg::Item(lit.clone());
             }
             Expr::Path(i) => {
-                let path = i.path.segments.last().unwrap().ident.to_string();
+                let mut path = i.path.segments.last().unwrap().ident.to_string();
                 if let Some(arg) = self.objects.get(&path) {
                     self.current_arg = arg.clone();
                 } else {
+                    if path == self.input_name {
+                        path = "input".to_string();
+                    }
                     self.current_arg = Arg::Item(path);
                 }
             }
@@ -183,10 +182,13 @@ impl Fold for Reader {
             Expr::Reference(i) => {
                 match *i.expr {
                     Expr::Path(j) => {
-                        let path = j.path.segments.last().unwrap().ident.to_string();
+                        let mut path = j.path.segments.last().unwrap().ident.to_string();
                         if let Some(arg) = self.objects.get(&path) {
                             self.current_arg = arg.clone();
                         } else {
+                            if path == self.input_name {
+                                path = "input".to_string();
+                            }
                             self.current_arg = Arg::Item("&".to_string() + &path);
                         }
                     }

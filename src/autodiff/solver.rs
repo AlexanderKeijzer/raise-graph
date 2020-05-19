@@ -1,16 +1,14 @@
 use crate::reader::Arg;
 use crate::reader::Operation;
-use crate::autodiff::autodiff::AutoDiff;
+use crate::autodiff::autodiff::{OUTPUT_NAMES, AutoDiff};
 use quote::{quote, format_ident};
 use proc_macro2::TokenStream;
 use syn::Ident;
-
-static ARRGUMENT_NAMES: &[&str] = &["a", "b", "c", "d", "e"];
+use std::collections::HashMap;
 
 pub struct Solver {
     autodiff: AutoDiff,
     curr_var: u32,
-    out_exprs: Vec<Ident>
 }
 
 impl Solver {
@@ -18,46 +16,68 @@ impl Solver {
         Solver {
             autodiff: AutoDiff::new(),
             curr_var: 1,
-            out_exprs: Vec::new()
         }
     }
 
-    pub fn solve(&mut self, arg_graph: Arg, grad: TokenStream, input: &TokenStream) -> TokenStream {
-        //if let Arg::Operation(op) = &arg_graph {
-        //    Solver::reverse_graph(&(**op), &vec!["&input".to_string()])
-        //}
-        let to_grad: Vec<String> = (vec!["input", "self.weight", "self.bias"]).into_iter().map(|s| s.to_string()).collect();
-        let result = self.solve_operation(arg_graph, grad, &to_grad, input);
-        let s = &self.out_exprs;
+    pub fn solve(&mut self, arg_graph: Arg, grad: TokenStream, solve_for: Vec<String>) -> TokenStream {
+
+        let mut solution_map: HashMap<String, Vec<TokenStream>> = HashMap::new();
+        for needed_grad in solve_for {
+            solution_map.insert(needed_grad, Vec::new());
+        }
+        let result = self.solve_operation(arg_graph, grad, &mut solution_map);
+
+        let mut outputs = TokenStream::new();
+
+        for (variable, solution) in solution_map {
+            if variable != "input".to_string() {
+                let ident: TokenStream = variable.parse().unwrap();
+                outputs = quote! {
+                    #ident.gradient = Some(Box::new(#(#solution)+*));
+                    #outputs
+                }
+            } else {
+                outputs = quote! {
+                    #outputs
+                    #(#solution)+*
+                }
+            }
+        }
         quote! {
             #result
-            #(#s)+*
+            #outputs
         }
     }
 
-    fn solve_operation(&mut self, arg_graph: Arg, grad: TokenStream, to_grad: &Vec<String>, input: &TokenStream) -> TokenStream {
+    fn solve_operation(&mut self, arg_graph: Arg, grad: TokenStream, solution_map: &mut HashMap<String, Vec<TokenStream>>) -> TokenStream {
         match arg_graph {
             Arg::None => panic!("None argument in graph!"),
-            Arg::Item(_) => quote! {},//item.parse().unwrap(),
-            Arg::Operation(op) => self.diff(*op, grad, to_grad, input)
+            Arg::Item(mut item) => {
+                item = item.replace("&", "").replace(".", " . "); // This is not very nice at all...
+                if let Some(vec) = solution_map.get_mut(&item) {
+                    vec.push(grad);
+                }
+                TokenStream::new()
+            }
+            Arg::Operation(op) => self.diff(*op, grad, solution_map)
         }
     }
 
     
-    fn diff(&mut self, operation: Operation, grad: TokenStream, to_grad: &Vec<String>, input: &TokenStream) -> TokenStream {
+    fn diff(&mut self, operation: Operation, grad: TokenStream, solution_map: &mut HashMap<String, Vec<TokenStream>>) -> TokenStream {
 
-        // Get expressions needed to solve for input grad and other wanted grads
-        let needed_exprs = Solver::get_needed_expressions(&operation, to_grad);
+        // Get expressions needed to solve for input grad and other needed grads
+        let needed_exprs = Solver::get_needed_expressions(&operation, solution_map);
 
         // Construct expression inputs (grad + a & b & ...)
-        let (inputs, save_expr) = self.define_inputs(&operation, &grad, &needed_exprs, &input);
+        let inputs = self.define_inputs(&operation, &grad, &needed_exprs);
 
         // Solve every expression at this level collecting the results of the expressions
-        let (expressions, next_level, idents) = self.define_expressions(operation, save_expr, needed_exprs);
+        let (expressions, next_level, idents) = self.define_expressions(operation, needed_exprs);
 
         // Solve every every expression at sublevel with results of this level
-        let next_level_solved: Vec<TokenStream> = next_level.into_iter().map(|(arg, ident)| {
-                self.solve_operation(arg, ident, to_grad, input)
+        let next_level_solved: Vec<TokenStream> = next_level.into_iter().map(|(arg, grad)| {
+                self.solve_operation(arg, grad, solution_map)
             }).collect();
         
         // Create output block
@@ -73,11 +93,11 @@ impl Solver {
         }
     }
 
-    fn get_needed_expressions(operation: &Operation, to_grad: &Vec<String>) -> Vec<u8> {
+    fn get_needed_expressions(operation: &Operation, solution_map: &mut HashMap<String, Vec<TokenStream>>) -> Vec<u8> {
         let mut calc_expression: Vec<u8> = Vec::new();
 
         let input_n = operation.receiver.to_tokenstream();
-        for to_grad_element in to_grad  {
+        for to_grad_element in solution_map.keys()  {
             if input_n.to_string().contains(to_grad_element) {
                 calc_expression.push(0);
             }
@@ -85,7 +105,7 @@ impl Solver {
 
         for i in 0..operation.args.len() {
             let input_n = operation.args[i].to_tokenstream();
-            for to_grad_element in to_grad  {
+            for to_grad_element in solution_map.keys()  {
                 if input_n.to_string().contains(to_grad_element) {
                     calc_expression.push((i+1) as u8);
                 }
@@ -94,18 +114,14 @@ impl Solver {
         calc_expression
     }
 
-    fn define_inputs(&self, operation: &Operation, grad: &TokenStream, needed_exprs: &Vec<u8>, input: &TokenStream) -> (TokenStream, usize) {
+    fn define_inputs(&self, operation: &Operation, grad: &TokenStream, needed_exprs: &Vec<u8>) -> TokenStream {
         let mut inputs: Vec<TokenStream> = Vec::new();
         let mut input_names = Vec::new();
-        let mut save_expr: usize = usize::MAX;
 
         let exprs = self.autodiff.get_expressions(&operation.method);
 
         // We should save and use the forward pass if needed
         let input_n = operation.receiver.to_tokenstream();
-        if input_n.to_string() == input.to_string() {
-            save_expr = 0;
-        }
         let mut calc = false;
         for needed_exp in needed_exprs {
             let (_, needed_args) = &exprs[*needed_exp as usize];
@@ -116,14 +132,11 @@ impl Solver {
         }
         if calc {
             inputs.push(input_n);
-            input_names.push(format_ident!("{}", ARRGUMENT_NAMES[0]));
+            input_names.push(format_ident!("{}", OUTPUT_NAMES[0]));
         }
 
         for i in 0..operation.args.len() {
             let input_n = operation.args[i].to_tokenstream();
-            if input_n.to_string() == input.to_string() {
-                save_expr = i+1;
-            }
             let mut calc = false;
             for needed_exp in needed_exprs {
                 let (_, needed_args) = &exprs[*needed_exp as usize];
@@ -134,7 +147,7 @@ impl Solver {
             }
             if calc {
                 inputs.push(input_n);
-                input_names.push(format_ident!("{}", ARRGUMENT_NAMES[i+1]));
+                input_names.push(format_ident!("{}", OUTPUT_NAMES[i+1]));
             }
         }
 
@@ -146,13 +159,13 @@ impl Solver {
             inputs[i] = expr_str.parse().unwrap();
         }
 
-        (quote! {
+        quote! {
             let grad = #grad;
             #(let #input_names = #inputs;)*
-        }, save_expr)
+        }
     }
 
-    fn define_expressions(&mut self, mut operation: Operation, save_expr: usize, calc_expression: Vec<u8>) -> (TokenStream, Vec<(Arg, TokenStream)>, Vec<Ident>) {
+    fn define_expressions(&mut self, mut operation: Operation, needed_exprs: Vec<u8>) -> (TokenStream, Vec<(Arg, TokenStream)>, Vec<Ident>) {
 
         let mut output = TokenStream::new();
 
@@ -160,7 +173,7 @@ impl Solver {
         let mut idents = Vec::new();
         let exprs = self.autodiff.get_expressions(&operation.method).clone();
         for i in 0..exprs.len() {
-            if !calc_expression.contains(&(i as u8)) {
+            if !needed_exprs.contains(&(i as u8)) {
                 continue;
             }
             let (expr, _) = &exprs[i];
@@ -168,10 +181,6 @@ impl Solver {
             let ident = format_ident!("x{}", self.curr_var);
             self.curr_var += 1;
             idents.push(ident.clone());
-
-            if save_expr == i {
-                self.out_exprs.push(ident.clone());
-            }
 
             if i == 0 {
                 next_level.push((operation.receiver.clone(), ident.to_string().parse().unwrap()));

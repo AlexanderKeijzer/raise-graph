@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use quote::quote;
 
 static ARRGUMENT_NAMES: &[&str] = &["{ a }", "{ b }", "{ c }", "{ d }", "{ e }", "{ f }", "{ g }"];
-static OUTPUT_NAMES: &[&str] = &["a", "b", "c", "d", "e", "f", "g"];
+pub static OUTPUT_NAMES: &[&str] = &["a", "b", "c", "d", "e", "f", "g"];
 
 pub struct AutoDiff {
     map: HashMap<String, Vec<(TokenStream, Vec<u8>)>>
