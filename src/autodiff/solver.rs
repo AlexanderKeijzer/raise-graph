@@ -81,7 +81,7 @@ impl Solver {
         let next_level_solved: Vec<TokenStream> = next_level.into_iter().map(|(arg, grad)| {
                 self.solve_operation(arg, grad, solution_map)
             }).collect();
-        
+    
         // Create output block
         quote! {
             #(let #idents;)*

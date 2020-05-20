@@ -57,10 +57,10 @@ impl AutoDiff {
         }
 
         //We should resolve type and accept function paths instead, but for now this works
-        add_diff!(self, "add", grad, grad);
-        add_diff!(self, "sub", grad, -grad);
-        add_diff!(self, "mul", grad*{b}.transpose(), {a}.transpose()*grad);
-        add_diff!(self, "div", grad/{b}, -(grad*{a})/({b}.powi(2)));
+        add_diff!(self, "add", grad.clone(), grad);
+        add_diff!(self, "sub", grad.clone(), -grad);
+        add_diff!(self, "mul", (&grad)*{b}.transpose(), {a}.transpose()*grad);
+        add_diff!(self, "div", (&grad)/{b}, -(grad*{a})/(&({b}).powi(2)));
         add_diff!(self, "neg", -grad);
         add_diff!(self, "sin", grad*{a}.cos());
         add_diff!(self, "cos", grad*(-{a}.sin()));
@@ -70,9 +70,9 @@ impl AutoDiff {
         add_diff!(self, "tanh", grad/({a}.cosh()).powi(2));
         add_diff!(self, "exp", grad*{a}.exp());
         add_diff!(self, "ln", grad/{a});
-        add_diff!(self, "clamp", grad*({a}.is_between({b}, {c})));
-        add_diff!(self, "clamp_min", grad*{a}.is_bigger({b}));
-        add_diff!(self, "clamp_max", grad*{a}.is_smaller({b}));
+        add_diff!(self, "clamp", grad*({a}.is_between({b}, {c}))); //Not complete
+        add_diff!(self, "clamp_min", grad*{a}.is_bigger({b})); //Not complete
+        add_diff!(self, "clamp_max", grad*{a}.is_smaller({b})); //Not complete
         add_diff!(self, "clone", grad);
     }
 }
