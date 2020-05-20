@@ -14,7 +14,7 @@ pub struct Solver {
 impl Solver {
     pub fn new() -> Solver {
         Solver {
-            autodiff: AutoDiff::new(),
+            autodiff: AutoDiff::new(), // We should have a static instance of this
             curr_var: 1,
         }
     }
@@ -25,27 +25,29 @@ impl Solver {
         for needed_grad in solve_for {
             solution_map.insert(needed_grad, Vec::new());
         }
-        let result = self.solve_operation(arg_graph, grad, &mut solution_map);
+        let calculations = self.solve_operation(arg_graph, grad, &mut solution_map);
 
-        let mut outputs = TokenStream::new();
+        // Create results of the gradient calculation
+        let mut results = TokenStream::new();
 
         for (variable, solution) in solution_map {
             if variable != "input".to_string() {
                 let ident: TokenStream = variable.parse().unwrap();
-                outputs = quote! {
+                results = quote! {
                     #ident.gradient = Some(Box::new(#(#solution)+*));
-                    #outputs
+                    #results
                 }
             } else {
-                outputs = quote! {
-                    #outputs
+                results = quote! {
+                    #results
                     #(#solution)+*
                 }
             }
         }
+
         quote! {
-            #result
-            #outputs
+            #calculations
+            #results
         }
     }
 
@@ -59,12 +61,12 @@ impl Solver {
                 }
                 TokenStream::new()
             }
-            Arg::Operation(op) => self.diff(*op, grad, solution_map)
+            Arg::Operation(op) => self.diff_operation(*op, grad, solution_map)
         }
     }
 
     
-    fn diff(&mut self, operation: Operation, grad: TokenStream, solution_map: &mut HashMap<String, Vec<TokenStream>>) -> TokenStream {
+    fn diff_operation(&mut self, operation: Operation, grad: TokenStream, solution_map: &mut HashMap<String, Vec<TokenStream>>) -> TokenStream {
 
         // Get expressions needed to solve for input grad and other needed grads
         let needed_exprs = Solver::get_needed_expressions(&operation, solution_map);
@@ -85,7 +87,9 @@ impl Solver {
             #(let #idents;)*
             {
                 #inputs
+                #(
                 #expressions
+                )*
             }
             #(
                 #next_level_solved
@@ -93,21 +97,17 @@ impl Solver {
         }
     }
 
-    fn get_needed_expressions(operation: &Operation, solution_map: &mut HashMap<String, Vec<TokenStream>>) -> Vec<u8> {
+    fn get_needed_expressions(operation: &Operation, solution_map: &HashMap<String, Vec<TokenStream>>) -> Vec<u8> {
         let mut calc_expression: Vec<u8> = Vec::new();
 
-        let input_n = operation.receiver.to_tokenstream();
-        for to_grad_element in solution_map.keys()  {
-            if input_n.to_string().contains(to_grad_element) {
-                calc_expression.push(0);
-            }
-        }
+        let mut op_args = vec![&operation.receiver];
+        op_args.append(&mut operation.args.iter().map(|f| f).collect());
 
-        for i in 0..operation.args.len() {
-            let input_n = operation.args[i].to_tokenstream();
+        for i in 0..op_args.len() {
+            let input_n = op_args[i].to_tokenstream();
             for to_grad_element in solution_map.keys()  {
                 if input_n.to_string().contains(to_grad_element) {
-                    calc_expression.push((i+1) as u8);
+                    calc_expression.push(i as u8);
                 }
             }
         }
@@ -120,39 +120,29 @@ impl Solver {
 
         let exprs = self.autodiff.get_expressions(&operation.method);
 
-        // We should save and use the forward pass if needed
-        let input_n = operation.receiver.to_tokenstream();
-        let mut calc = false;
-        for needed_exp in needed_exprs {
-            let (_, needed_args) = &exprs[*needed_exp as usize];
-            if needed_args.contains(&0) {
-                calc = true;
-                break
-            }
-        }
-        if calc {
-            inputs.push(input_n);
-            input_names.push(format_ident!("{}", OUTPUT_NAMES[0]));
-        }
+        let mut op_args = vec![&operation.receiver];
+        op_args.append(&mut operation.args.iter().map(|f| f).collect());
 
-        for i in 0..operation.args.len() {
-            let input_n = operation.args[i].to_tokenstream();
+        // We should save and use the forward pass if needed
+        for i in 0..op_args.len() {
+            let input_n = op_args[i].to_tokenstream();
             let mut calc = false;
             for needed_exp in needed_exprs {
                 let (_, needed_args) = &exprs[*needed_exp as usize];
-                if needed_args.contains(&((i+1) as u8)) {
+                if needed_args.contains(&(i as u8)) {
                     calc = true;
                     break
                 }
             }
             if calc {
                 inputs.push(input_n);
-                input_names.push(format_ident!("{}", OUTPUT_NAMES[i+1]));
+                input_names.push(format_ident!("{}", OUTPUT_NAMES[i]));
             }
         }
 
-        //Since we get input as reference in the forwards pass and as owned value in the backwards pass
-        //we should replace to avoid issues
+        // Since we get input as reference in the forwards pass and as owned value in the backwards pass
+        // we should replace to avoid issues. However, it would be even better to keep track of usage and
+        // use an owned value where the operation can be done inplace.
         for i in 0..inputs.len() {
             let mut expr_str = inputs[i].to_string();
             expr_str = expr_str.replace("input", "(&input)");
@@ -165,9 +155,9 @@ impl Solver {
         }
     }
 
-    fn define_expressions(&mut self, mut operation: Operation, needed_exprs: Vec<u8>) -> (TokenStream, Vec<(Arg, TokenStream)>, Vec<Ident>) {
+    fn define_expressions(&mut self, mut operation: Operation, needed_exprs: Vec<u8>) -> (Vec<TokenStream>, Vec<(Arg, TokenStream)>, Vec<Ident>) {
 
-        let mut output = TokenStream::new();
+        let mut output = Vec::new();
 
         let mut next_level: Vec<(Arg, TokenStream)> = Vec::new();
         let mut idents = Vec::new();
@@ -188,94 +178,10 @@ impl Solver {
                 next_level.push((operation.args.remove(0), ident.to_string().parse().unwrap()));
             }
 
-            output = quote! {
-                #output
+            output.push(quote! {
                 #ident = #expr;
-            };
+            });
         }
         (output, next_level, idents)
     }
-
-    /*
-
-    fn reverse_graph(operation: &Operation, param_list: &Vec<String>) {
-
-        let mut op_dep_map = HashMap::new();
-        let mut var_dep_map = HashMap::new();
-
-        op_dep_map.insert(1, (0, operation));
-
-        let curr_var = 1;
-        Solver::fill_map(&mut op_dep_map, &mut var_dep_map, param_list, curr_var, operation);
-/*
-        let mut needed_ops = Vec::new();
-        for var_deps in var_dep_map.values() {
-            needed_ops.append(&mut var_deps.clone());
-            let mut next_ops = Vec::new();
-            for needed in var_deps {
-                if needed > &0 {
-                    let (next, _) = op_dep_map.get(needed).unwrap();
-                    next_ops.push(*next);
-                }
-            }
-            while !next_ops.is_empty() {
-                let needed = next_ops.pop().unwrap();
-                if needed > 0 {
-                    let (next, _) = op_dep_map.get(&needed).unwrap();
-                    next_ops.push(*next);
-                }
-            }
-        }
-*/
-        println!("{:?}", op_dep_map);
-        //println!("{:?}", var_dep_map);
-
-
-    }
-
-    fn fill_map<'a, 'b: 'a>(op_dep_map: &'a mut HashMap<i32, (i32, &'b Operation)>, var_dep_map: &mut HashMap<String, Vec<i32>>, param_list: &Vec<String>, mut curr_var: i32, operation: &'b Operation) {
-
-        let mut ops = Vec::new();
-        let dep = curr_var;
-
-        if let Arg::Operation(inner_op) = &operation.receiver {
-            ops.push(inner_op);
-            curr_var += 1;
-            op_dep_map.insert(curr_var, (dep, inner_op));
-        } else if let Arg::Item(param) = &operation.receiver {
-            if param_list.contains(param) {
-                let res = var_dep_map.remove(param);
-                if let Some(mut curr) = res {
-                    curr.push(curr_var);
-                    var_dep_map.insert(param.to_owned(), curr);
-                } else {
-                    var_dep_map.insert(param.to_owned(), vec![curr_var]);
-                }
-            }
-        }
-        for arg in &operation.args {
-            if let Arg::Operation(inner_op) = arg {
-                ops.push(inner_op);
-                curr_var += 1;
-                op_dep_map.insert(curr_var, (dep, inner_op));
-            } else if let Arg::Item(param) = &operation.receiver {
-                if param_list.contains(param) {
-                    let res = var_dep_map.remove(param);
-                    if let Some(mut curr) = res {
-                        curr.push(curr_var);
-                        var_dep_map.insert(param.to_owned(), curr);
-                    } else {
-                        var_dep_map.insert(param.to_owned(), vec![curr_var]);
-                    }
-                }
-            }
-        }
-        let mut c_v = dep;
-        for op in ops {
-            c_v += 1;
-            Solver::fill_map(op_dep_map, var_dep_map, param_list, c_v, op);
-        }
-    }
-
-    */
 }

@@ -41,6 +41,7 @@ impl AutoDiff {
 
     pub fn init(&mut self) {
 
+        // Can we... move this? Rust is weird in where you can define and then use macros
         macro_rules! add_diff {
             ($owner:path, $func:literal, $($diff:expr),* ) => {
                 {
@@ -67,11 +68,11 @@ impl AutoDiff {
         add_diff!(self, "sinh", grad*{a}.cosh());
         add_diff!(self, "cosh", grad*{a}.sinh());
         add_diff!(self, "tanh", grad/({a}.cosh()).powi(2));
-        add_diff!(self, "exp", grad*&{a}.exp());
+        add_diff!(self, "exp", grad*{a}.exp());
         add_diff!(self, "ln", grad/{a});
-        add_diff!(self, "clamp", grad*(&{a}.is_between({b}, {c})));
-        add_diff!(self, "clamp_min", grad*&{a}.is_bigger({b}));
-        add_diff!(self, "clamp_max", grad*&{a}.is_smaller({b}));
+        add_diff!(self, "clamp", grad*({a}.is_between({b}, {c})));
+        add_diff!(self, "clamp_min", grad*{a}.is_bigger({b}));
+        add_diff!(self, "clamp_max", grad*{a}.is_smaller({b}));
         add_diff!(self, "clone", grad);
     }
 }

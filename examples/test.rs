@@ -52,8 +52,8 @@ struct Test2 {
 impl Layer for Test2 {
 
     #[into_backward]
-    fn forward(&self, inputd: &Tensor) -> Tensor {
-         inputd.clone().clamp_min(0.).exp().ln()/(5.)
+    fn forward(&self, input: &Tensor) -> Tensor {
+         input.clone().clamp_min(0.).exp().ln()/(5.)
     }
 
     fn take_input(&mut self) -> Tensor {
