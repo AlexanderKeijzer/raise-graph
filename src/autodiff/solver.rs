@@ -34,7 +34,18 @@ impl Solver {
             if variable != "input".to_string() {
                 let ident: TokenStream = variable.parse().unwrap();
                 results = quote! {
-                    #ident.gradient = Some(Box::new(#(#solution)+*));
+                    {
+                        let mut res = #(#solution)+*;
+                        for i in 0..3 {
+                            if #ident.shape[i] < res.shape[i] {
+                                res.sum(i);
+                            }
+                        }
+                        if #ident.shape[3] < res.shape[3] {
+                            res.mean(3);
+                        }
+                        #ident.gradient = Some(Box::new(res));
+                    }
                     #results
                 }
             } else {

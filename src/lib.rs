@@ -2,7 +2,6 @@
 mod autodiff;
 mod reader;
 
-extern crate raise;
 extern crate proc_macro;
 
 use reader::Reader;

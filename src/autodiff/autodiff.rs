@@ -74,5 +74,7 @@ impl AutoDiff {
         add_diff!(self, "clamp_min", grad*{a}.is_bigger({b})); //Not complete
         add_diff!(self, "clamp_max", grad*{a}.is_smaller({b})); //Not complete
         add_diff!(self, "clone", grad);
+        add_diff!(self, "powi", grad*{b}*({a}.powi({b-1}))); // Not complete: grad*{a}.ln()*({a}.powi({b}))
+        add_diff!(self, "powf", grad*{b}*({a}.powf({b-1}))); // Not complete: grad*{a}.ln()*({a}.powf({b}))
     }
 }
