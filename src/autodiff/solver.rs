@@ -36,13 +36,10 @@ impl Solver {
                 results = quote! {
                     {
                         let mut res = #(#solution)+*;
-                        for i in 0..3 {
+                        for i in 0..res.shape.len() {
                             if #ident.shape[i] < res.shape[i] {
                                 res.sum(i);
                             }
-                        }
-                        if #ident.shape[3] < res.shape[3] {
-                            res.mean(3);
                         }
                         #ident.gradient = Some(Box::new(res));
                     }
